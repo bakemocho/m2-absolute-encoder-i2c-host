@@ -1,5 +1,7 @@
 # M2Encoder: host-side I2C reader for the M2 absolute angle sensor
 
+日本語版は [README.ja.md](README.ja.md) にあります。
+
 Arduino-compatible library for reading the M2 absolute angle sensor over I2C.
 "M2" is the name of this encoder series. The sensor resolves absolute angle from a coded plate mounted on the
 rotating body itself, so the origin belongs to the machine and does not reset
@@ -36,6 +38,61 @@ if (enc.read(r) && r.valid) use(r.deg);   // 0.0 .. 359.8 in 0.2° steps
 `r.valid` is true only when the status has ABSOLUTE set and PROBATION clear.
 A reading of `0xFFFF` cells means "not absolute yet". It is not a number, so do
 not average it.
+
+## Example
+
+The sketch below is `examples/basic_read/basic_read.ino`. It reads the sensor
+every 50 ms and branches on the suggested action.
+
+```cpp
+// basic_read: read the M2 absolute angle sensor and act on its status.
+#include <Wire.h>
+#include <M2Encoder.h>
+
+m2enc::M2Encoder enc;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+  if (!enc.begin(Wire, 0x36)) {
+    Serial.println("sensor not found at 0x36");
+  }
+  enc.setSecondsPerCell(0.033f);   // your rotation rate; only used by report()
+}
+
+void loop() {
+  m2enc::Reading r;
+  if (!enc.read(r)) {
+    Serial.println("bus error");
+    delay(100);
+    return;
+  }
+
+  switch (r.action) {
+    case m2enc::NextAction::Use:
+      Serial.print("angle "); Serial.print(r.deg, 1); Serial.println(" deg");
+      break;
+    case m2enc::NextAction::Rotate:
+      // Angle is 0xFFFF until the sensor has seen a little motion (worst case 0.8 deg).
+      Serial.print("not absolute yet, candidates "); Serial.println(r.n_cand);
+      break;
+    case m2enc::NextAction::Service:
+      // Angle is still valid; one or more contacts are excluded. Plan maintenance.
+      Serial.print("angle "); Serial.print(r.deg, 1);
+      Serial.print(" deg (degraded, dead mask 0x"); Serial.print(r.dead, HEX); Serial.println(")");
+      break;
+    case m2enc::NextAction::CheckConfig:
+      Serial.println("mark-width setting invalid; check installation");
+      break;
+  }
+  delay(50);   // 10-100 ms polling is enough; the sensor updates internally at 1 ms
+}
+```
+
+`r.action` is derived on the host from the status byte. It is `Use` when the
+angle is valid and nothing is excluded, `Rotate` while the sensor still needs
+motion, `Service` when the angle is valid but contacts are excluded, and
+`CheckConfig` on a configuration error.
 
 ## Register map (firmware 0x07)
 
