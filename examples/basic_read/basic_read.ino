@@ -1,42 +1,40 @@
-// basic_read: read the M2 absolute angle sensor and act on its status.
-#include <Wire.h>
+// Monitor a device configured and started by its application.
+// Never starts scanning/motion or writes persistent settings automatically.
 #include <M2Encoder.h>
-
-m2enc::M2Encoder enc;
+m2enc::M2Encoder encoder;
+bool attached = false;
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin();
-  if (!enc.begin(Wire, 0x36)) {
-    Serial.println("sensor not found at 0x36");
-  }
-  enc.setSecondsPerCell(0.033f);   // your rotation rate; only used by report()
+  Wire.begin(); // Select the correct SDA/SCL pins for your board first.
+  Wire.setClock(100000);
+#if defined(ARDUINO_ARCH_ESP32)
+  Wire.setTimeOut(30);
+#elif defined(WIRE_HAS_TIMEOUT)
+  Wire.setWireTimeout(30000, true);
+#endif
+  // Other platforms must supply their own bounded Wire timeout.
+  attached = encoder.begin() == m2enc::Ok;
+  if (!attached) Serial.println("No compatible device; check wiring and restart explicitly.");
 }
 
 void loop() {
-  m2enc::Reading r;
-  if (!enc.read(r)) {
-    Serial.println("bus error");
-    delay(100);
-    return;
+  if (!attached) { delay(100); return; }
+  m2enc::Reading status;
+  m2enc::Result result = encoder.poll(status);
+  if (result != m2enc::Ok) {
+    Serial.print("Read failed: "); Serial.println(int(result));
+    if (result == m2enc::DeviceRestarted || result == m2enc::UnsupportedProtocol) attached = false;
+    delay(50); return;
   }
-
-  switch (r.action) {
-    case m2enc::NextAction::Use:
-      Serial.print("angle "); Serial.print(r.deg, 1); Serial.println(" deg");
-      break;
-    case m2enc::NextAction::Rotate:
-      // Angle is 0xFFFF until the sensor has seen a little motion (worst case 0.8 deg).
-      Serial.print("not absolute yet, candidates "); Serial.println(r.n_cand);
-      break;
-    case m2enc::NextAction::Service:
-      // Angle is still valid; one or more contacts are excluded. Plan maintenance.
-      Serial.print("angle "); Serial.print(r.deg, 1);
-      Serial.print(" deg (degraded, dead mask 0x"); Serial.print(r.dead, HEX); Serial.println(")");
-      break;
-    case m2enc::NextAction::CheckConfig:
-      Serial.println("mark-width setting invalid; check installation");
-      break;
+  m2enc::Position position;
+  float degrees;
+  if (status.usable(micros()) && encoder.readPosition(position) == m2enc::Ok &&
+      position.angleDegrees(micros(), degrees)) {
+    Serial.print("Angle: "); Serial.print(degrees, 1);
+    Serial.println((status.core_status & m2enc::Degraded) ? " deg (service required)" : " deg");
+  } else {
+    Serial.println("No current angle: check scan configuration and acquisition state.");
   }
-  delay(50);   // 10-100 ms polling is enough; the sensor updates internally at 1 ms
+  delay(50); // Host polling policy, not the sensor's scan period.
 }
