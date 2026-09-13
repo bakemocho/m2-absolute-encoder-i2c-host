@@ -1,125 +1,125 @@
-# M2Encoder: M2 絶対角センサをホスト側から I2C で読むライブラリ
+# M2Encoder：M2エンコーダのI2Cホストライブラリ
 
-M2 絶対角センサを I2C で読むための Arduino 互換ライブラリです。
-「M2」はこのエンコーダ系列の呼称です。センサは回転体そのものに取り付けたコード板から絶対角を求めるので、原点は機械の側に固有で、モータ、カップリング、減速機を交換してもリセットされません。
+**0.2.0は通信プロトコル1／センサコア0x0Eに対応します。**
+旧0x07用の読み取りAPIは置き換えました。後方互換性は維持していません。
+公開範囲はホスト側の通信と操作APIです。センサFW、復号処理、コード板のパターンは含みません。
 
-このリポジトリはホスト側だけです。センサのレジスタを読み、角度、有効かどうか、縮退の状態、次にすべき動作を返します。
+## まず角度を読む
 
-センサ本体は含みません。コード板のパターン、復号処理、センサのファームウェアはここには公開していません。
+[使用例](examples/basic_read/basic_read.ino)は、設定・走査開始済みのセンサを監視します。
+走査開始、モータ駆動、原点や故障履歴の書き換えは自動実行しません。
 
-## 配線
-
-| 項目 | 値 |
-|---|---|
-| 役割 | センサが I2C の**スレーブ**、ホストがマスター |
-| アドレス | **0x36**（7 ビット） |
-| 速度 | 100 kHz（標準モード） |
-| 電源 | 3.3 V（光学式）。プルアップはセンサ基板に実装済みなので追加しないでください |
-| クロックストレッチ | なし。読み出しは常に即答します |
-
-## 読み方
-
-レジスタアドレスを書き、リピーテッドスタートの後に読みます。アドレスは自動で進むので、ライブラリは `0x00..0x16` を一度に読みます。
+ホスト側でWireのピン、クロック、タイムアウトを設定してから、次のように接続します。
+`begin()`の戻り値は真偽値ではなく`m2enc::Result`です。成功を表す`Ok`は0です。
 
 ```cpp
-m2enc::M2Encoder enc;
-enc.begin(Wire, 0x36);
-m2enc::Reading r;
-if (enc.read(r) && r.valid) use(r.deg);   // 0.0 .. 359.8、0.2° 刻み
-```
-
-`r.valid` が真になるのは、状態の ABSOLUTE が立ち、PROBATION が立っていないときだけです。
-セル値 `0xFFFF` は「まだ確定していない」を表します。数値ではないので、平均に混ぜないでください。
-
-## 使用例
-
-次のスケッチは `examples/basic_read/basic_read.ino` です。50 ms ごとにセンサを読み、推奨動作で分岐します。
-
-```cpp
-// basic_read: read the M2 absolute angle sensor and act on its status.
-#include <Wire.h>
-#include <M2Encoder.h>
-
-m2enc::M2Encoder enc;
-
-void setup() {
-  Serial.begin(115200);
-  Wire.begin();
-  if (!enc.begin(Wire, 0x36)) {
-    Serial.println("sensor not found at 0x36");
-  }
-  enc.setSecondsPerCell(0.033f);   // your rotation rate; only used by report()
-}
-
-void loop() {
-  m2enc::Reading r;
-  if (!enc.read(r)) {
-    Serial.println("bus error");
-    delay(100);
-    return;
-  }
-
-  switch (r.action) {
-    case m2enc::NextAction::Use:
-      Serial.print("angle "); Serial.print(r.deg, 1); Serial.println(" deg");
-      break;
-    case m2enc::NextAction::Rotate:
-      // Angle is 0xFFFF until the sensor has seen a little motion (worst case 0.8 deg).
-      Serial.print("not absolute yet, candidates "); Serial.println(r.n_cand);
-      break;
-    case m2enc::NextAction::Service:
-      // Angle is still valid; one or more contacts are excluded. Plan maintenance.
-      Serial.print("angle "); Serial.print(r.deg, 1);
-      Serial.print(" deg (degraded, dead mask 0x"); Serial.print(r.dead, HEX); Serial.println(")");
-      break;
-    case m2enc::NextAction::CheckConfig:
-      Serial.println("mark-width setting invalid; check installation");
-      break;
-  }
-  delay(50);   // 10-100 ms polling is enough; the sensor updates internally at 1 ms
+m2enc::M2Encoder encoder;
+if (encoder.begin() == m2enc::Ok) {
+    m2enc::Position p;
+    float degrees;
+    if (encoder.readPosition(p) == m2enc::Ok &&
+        p.angleDegrees(micros(), degrees)) {
+        // 有効期限内にdegreesを使う。
+    }
 }
 ```
 
-`r.action` はホスト側で状態バイトから決めています。角度が有効で除外も無い状態なら `Use`、まだ回転が要る間は `Rotate`、角度は有効でも接点が除外されていれば `Service`、設定エラーなら `CheckConfig` です。
+`begin()`は版数とコマンド番号を読みます。走査の設定や開始は行いません。
+`poll()`の`Reading`は生の座標、`readPosition()`の`Position`は設定した原点を反映した座標です。
+1周は1800セル、1セルは0.2度です。この刻み幅は実機の角度精度を保証する値ではありません。
 
-## レジスタ表（ファームウェア 0x07）
+## 主な操作
 
-| アドレス | バイト | 内容 |
-|---|---|---|
-| 0x00–0x01 | 2 | 角度。セル 0〜1799（×0.2 で度）、リトルエンディアン。0xFFFF は未確定 |
-| 0x02–0x03 | 2 | 生の 15 ビット読み取り値（デバッグ用） |
-| 0x04 | 1 | 状態フラグ（下表） |
-| 0x05 | 1 | 生存モジュールのマスク（bit 0〜2、リング版） |
-| 0x06 | 1 | マーク幅の設定値 w |
-| 0x07 | 1 | ファームウェア版数（0x07） |
-| 0x08–0x0D | 6 | デバッグ用: 生入力、デバウンス後入力、リセット回数、I2C エラー回数、役割、モジュール番号 |
-| 0x0E–0x0F | 2 | 位置候補数。1 なら一意 |
-| 0x10–0x11 | 2 | 確定した固着接点のビットマップ |
-| 0x12 | 1 | 復号の矛盾検出回数 |
-| 0x13 | 1 | 自動修復の採用回数 |
-| 0x14–0x15 | 2 | 暫定除外（経過観察中）のビットマップ |
-| 0x16 | 1 | 直前の事象の回転方向: 0 不明 / 1 正転 / 2 逆転 / 3 混在 |
-| 上記以外 | 1 | 0xEE |
+| 目的 | API |
+| --- | --- |
+| 角度と状態を読む | `poll`、`readPosition` |
+| 走査周期を指定・自動化する | `configureFixed`、`configureAuto`、`readConfiguration` |
+| 走査を開始・停止する | `start`、`stop` |
+| 候補角と分解能を調べる | `captureCandidates`、`readQuality`、`readCandidatePage` |
+| 候補角に原点を反映する | `readCandidateOrigin` |
+| 原点を保存する | `readOrigin`、`setOriginMilliDegrees`、`zeroHere` |
+| 故障履歴を読む・全消去する | `readFaultMemory`、`clearFaultHistory` |
+| 応答試験と交換後の復帰 | `testSensors`、`readMaintenance`、`readSensorTest`、`acknowledgeRepairedSensor` |
+| 起動状態とリセット原因を読む | `readBoardDiagnostic` |
+| 送達が不確かなコマンドを再送する | `pendingId`、`retry` |
 
-### 状態フラグ（0x04）
+Arduino用の`M2Encoder`は`TwoWire`と`micros()`を使います。
+他の環境では`Client<Bus>`へ、Wire互換バスと32ビットのマイクロ秒時計を渡せます。
+クライアント内では動的にメモリを確保しません。
 
-| ビット | 名前 | 意味 | ホスト側の推奨動作 |
-|---|---|---|---|
-| 0x01 | ABSOLUTE | 角度が一意に決まっている | 角度を使う |
-| 0x02 | DEGRADED | 接点またはモジュールを除外して動作中 | 使用継続。保守を予約 |
-| 0x04 | NEED_MOTION | 証拠不足。角度は 0xFFFF | 少し回して読み直す |
-| 0x08 | CFG_ERROR | マーク幅の設定が不正 | 据付設定を確認 |
-| 0x10 | BIT_FAULT | 固着接点を特定して除外済み | 交換を予約 |
-| 0x20 | PROBATION | 暫定除外中。角度はリリース相当ではない | 角度を使わない |
-| 0x40 | REVERSED | 直前の事象が逆回転 | 参考情報 |
+## コマンドは「送った」と「適用された」を分ける
 
-## 使う側で見込んでおくこと
+`Submitted`はI2Cで応答が返ったことを示します。
+直後に`pendingId()`を保存し、後のループで`poll()`してください。
+`command_id`が一致し、`command_result == M2_OK`なら、センサ側がコマンドを受け付けています。
+拒否されたコマンドも保留状態から外れるため、結果コードの確認が必要です。
 
-- 電源投入直後は必ず 0xFFFF / NEED_MOTION から始まります。キャリブレーションは不要ですが、わずかな回転が要ります。健全時の最悪値は 4 セル（0.8°）です。
-- 読み出し周期は 10〜100 ms で十分です。センサ側は 1 ms 周期で内部更新しているので、それより速く読んでも値は増えません。
-- 0x00–0x01 は 2 バイトを一度に読み、同じ時点の値にしてください。
-- 現行の読み取り方式の回転速度の上限は毎分約 2 回転です。
+同時に保留できるコマンドは1件です。
+送達が不確かな場合、`retry()`は同じ番号・同じ内容を再送します。
+アプリ側に待ち時間の上限を設けてください。
+`stop()`は保留中のコマンドより新しい番号で送れますが、機械的な非常停止の代わりにはなりません。
+
+1台のセンサを制御するクライアントは1つにしてください。
+16ビットのコマンド番号は、複数マスターの調停や完全な再起動検出には使えません。
+以前に観測した非ゼロの番号が0へ戻ると`DeviceRestarted`になります。
+通信失敗や再起動を理由に、履歴消去や駆動再開を自動実行しないでください。
+
+走査は設定後に`start()`します。
+`Timing`には点灯後の待ち時間、消灯後の待ち時間、安定読み取り回数、入力極性を指定します。
+周期と待ち時間の単位はマイクロ秒です。
+[通信仕様](docs/protocol.md)の入力範囲と、実機で成立する光学応答時間は区別してください。
+
+## 候補角・故障・原点
+
+読み値は使用する時点で`usable(micros())`などを確認します。
+通信にかかった時間も有効期限に含め、期限ちょうどの値は無効にします。
+32ビット時計が1周するほど長く、読み値を保持しないでください。
+
+候補の取得開始後は、`Quality`が完成するまで待ちます。
+新しい`Candidates`オブジェクトへ同じ取得番号の12ページを読み込んでください。
+途中で番号が変わると`SnapshotChanged`になります。
+期限切れの候補は過去の記録として参照できても、現在値としては使用できません。
+
+候補集合はセルの列挙であり、確率ではありません。
+`resolutionDegrees()`は候補を含む円弧の幅です。円弧の途中に候補でないセルがある場合もあります。
+BNO055などの概略方位で絞る場合は、原点と誤差幅をホスト側で扱ってください。
+その絞り込みによって、エンコーダ内部の角度確定状態は変わりません。
+
+原点や故障履歴は、コマンド受理とは別に保存完了を確認します。
+要求した値・マスクとの一致と`durable`を読み返してから、電源断後にも残る値として使います。
+`StorageTimeout`では書き込み結果が不確かです。未書き込みと決めつけて消去・再設定しないでください。
+
+センサ交換後は、停止、応答試験、試験番号を指定した個別復帰の順に進めます。
+試験と個別復帰の間で再度STOPすると、試験結果に基づく復帰の許可が失効します。
+`M2_MT_RESTORED`と期待する故障マスクの保存を確認してから走査を再開します。
+応答試験はデジタル信号を調べます。光の強度や全周の健全性を測る試験ではありません。
+
+`clearFaultHistory()`は全故障履歴を消します。
+通常の交換後復帰には使わず、複数の故障を残したまま消去して復旧できるとも判断しないでください。
+
+## 配線と検証範囲
+
+センサのI2Cアドレスは7ビットの0x36です。評価は100 kHzから始めてください。
+現行基板のFWはクロックストレッチを使います。ホスト側の対応と待ち時間の上限が必要です。
+給電電圧、信号電圧、プルアップ、他のI2C機器との接続は、使用する基板で確認してください。
+このライブラリだけでは5 V耐性やケーブル長は保証できません。
+
+ホスト試験は次のコマンドで再実行できます。
+
+```sh
+python3 tests/run_tests.py
+```
+
+Python 3と、AddressSanitizer／UndefinedBehaviorSanitizer対応のC++11コンパイラを使います。
+CRC、コマンド番号、再送、通信異常、有効期限、候補、原点、診断、引数異常を検査します。
+使用例はM5Stack Core ESP32向けにもコンパイルしました。
+
+別途、センサコア0x0Eの実ソースにつないだ試験で、通常・協調実行の両構成を確認しました。
+設定、起動停止、永続化、個別復帰、基板レジスタ経由の通信が対象です。
+非公開のセンサ実装を使うため、その試験環境はこのリポジトリに含めていません。
+実機、光学応答、ケーブル、モータの動作は未検証です。
 
 ## ライセンス
 
-MIT。ライセンスの対象はこのホスト側コードだけです。このリポジトリの公開は、いかなる特許の実施許諾も与えず、含意せず、放棄しません。センサ本体、その符号化方式、ファームウェアについての権利は移転しません。
+MIT。対象はホスト側コードだけです。
+公開によって、センサ本体、符号化方式、センサFWに関する特許の実施許諾を与えるものではありません。
