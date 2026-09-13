@@ -2,7 +2,9 @@
 
 [日本語の使い方](README.ja.md)
 
-Version **0.2.0** targets **wire protocol 1 / sensor core 0x0E**.
+Version **0.2.1** targets **wire protocol 1 / sensor core 0x0E**.
+0.2.1 adds the `TooFast` core flag (0x80) and acquisition reason 7: the sensor
+reports that the shaft outran its scan and withholds the angle until it slows.
 It replaces the old 0x07 register reader; there is no backward-compatibility API.
 Only the host interface is included. Sensor firmware, decoder and code patterns
 are not part of this repository.

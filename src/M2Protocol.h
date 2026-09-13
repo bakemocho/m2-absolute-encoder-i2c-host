@@ -25,7 +25,8 @@ enum SensorResult { M2_SR_UNTESTED=0, M2_SR_RESPONSE=1, M2_SR_NO_RESPONSE=2,
     M2_SR_INCONSISTENT=3, M2_SR_INVALID=4, M2_SR_INCOMPLETE=5 };
 constexpr uint8_t M2_REPAIR_ACK=0xa5, M2_STOPPED=3;
 enum CoreStatus { Absolute=0x01, Degraded=0x02, NeedMotion=0x04,
-    ConfigurationError=0x08, BitFault=0x10, Probation=0x20, Reversed=0x40 };
+    ConfigurationError=0x08, BitFault=0x10, Probation=0x20, Reversed=0x40,
+    TooFast=0x80 }; /* an edge outran the scan: the angle is withheld until the shaft slows */
 inline uint16_t em_u16(const uint8_t* p) {
     return uint16_t(uint16_t(p[0]) | (uint16_t(p[1])<<8));
 }

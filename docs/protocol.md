@@ -51,7 +51,11 @@ an error rather than a cached successful diagnostic.
 | 30 | 1 | Acquisition reason |
 
 Core flags: Absolute 0x01, Degraded 0x02, NeedMotion 0x04,
-ConfigurationError 0x08, BitFault 0x10, Probation 0x20, Reversed 0x40.
+ConfigurationError 0x08, BitFault 0x10, Probation 0x20, Reversed 0x40,
+TooFast 0x80. TooFast means a sensor edge passed faster than the configured
+stable-read window could commit it: the shaft is turning faster than the scan
+can follow, NeedMotion is set as well, and the angle is withheld until the
+shaft slows. Acquisition reason 7 (too fast) accompanies it.
 An I2C/CRC success does not by itself make the angle valid. Check the
 acquisition state, flags, range and remaining time through the typed API.
 
