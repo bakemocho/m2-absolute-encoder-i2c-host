@@ -24,12 +24,63 @@ address-inclusive SMBus PEC. The check value for ASCII `123456789` is 0xF4.
 | 0x86 | 0xE8 | Origin-adjusted position |
 | 0x87 | 0xE9 | Origin bound to a candidate capture |
 | 0x88 | 0xEA | Maintenance progress, revision 1 |
+| 0x89 | 0xEC | Estimate with a trust level, revision 1; optional |
 | 0x90..0x9B | 0xE3 | Candidate pages 0..11 |
 | 0xB0..0xB9 | 0xEB | Digital test results for sensors 0..9 |
 
 The client checks type, protocol and CRC. `begin()` additionally requires
 core version 0x0E from Status byte 24. Unsupported hardware extensions return
 an error rather than a cached successful diagnostic.
+
+## Estimate (optional)
+
+Some sensors answer selector 0x89. Others refuse it, and the read then fails
+with `CorruptResponse` or `BusError`; that is not a fault of the sensor. The
+Status frame is the same on both, so `poll()` works unchanged.
+
+The frame carries the sensor's best value at all times, with a level:
+
+| Level | Name | Meaning for the host |
+| --- | --- | --- |
+| 4 | `Confirmed` | The angle of the Status frame. Same cell in both frames. |
+| 3 | `Good` | Not yet confirmed, and no reason for doubt is known to the sensor. |
+| 2 | `Doubtful` | Right while the shaft is slow; can be far off after the shaft outran the sensor. |
+| 1 | `Guess` | More often wrong than right. |
+| 0 | `NoEstimate` | No value. |
+
+Only `Confirmed` is a position that anything may depend on. The lower levels
+exist so that a host can show a value, choose a direction, or decide how
+carefully to move while it waits for `Confirmed`.
+
+| Bytes | Field |
+| --- | --- |
+| 2 | Frame revision, 1 |
+| 3 | Sensor core identifier (informational) |
+| 4..5 | Cell, 0..1799; 0xFFFF with level 0 |
+| 6 | Level |
+| 7 | Margin (informational, larger is better) |
+| 8..9 | Detail word of the sensor (see below) |
+| 10..11 | Confirmed cell as in Status; 0xFFFF unless level 4 |
+| 12..15 | Frame sequence |
+| 16..19 | Age of the oldest sensor read in microseconds; 0xFFFFFFFF if not all sensors were read |
+| 20..23 | Time the confirmed angle stays valid, as in Status |
+| 24..26 | Core version, flags and core status as in Status bytes 24, 25 and 7 |
+
+The client refuses a frame whose level and cells contradict each other. It
+folds the detail word into four cautions and keeps the word itself as
+`Estimate::diagnostic`. Its bits are not part of the contract; quote the word
+in a support request.
+
+| Caution | Meaning |
+| --- | --- |
+| `ShaftFast` | The shaft moved faster than the sensor can follow, now or just before. |
+| `SensorDoubt` | A sensor read is missing, stale, excluded or disagrees with the others. |
+| `InstallationCheck` | The sensor has not finished checking its installation. Turn the shaft slowly through a wide arc once. |
+| `Settling` | The value has not settled; it needs more travel. |
+
+`Estimate::atLeast(level, now, max_age)` is true when the level is reached and
+the sensor reads behind the value are younger than `max_age`, counting the
+time since the bus transaction started.
 
 ## Status
 

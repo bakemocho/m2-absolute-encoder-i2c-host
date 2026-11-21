@@ -32,6 +32,27 @@ struct Reading {
         degrees=cell*0.2f;return true;
     }
 };
+/* The sensor's best value at all times, with a level. Read it beside poll(): Reading stays the confirmed angle.
+ * Confirmed: use it as Reading. Good: correct in the sensor's own tests wherever it was given, not yet confirmed.
+ * Doubtful: right while the shaft is slow, wrong when the shaft outran the sensor; fit to choose a direction or to
+ * show, not to stop on. Guess: more often wrong than right. Never treat a level below Confirmed as a position
+ * that safety depends on. */
+struct Estimate {
+    bool valid=false;                 /* a well-formed frame was received */
+    uint16_t cell=0xffff,confirmed_cell=0xffff,diagnostic=0;
+    uint8_t level=NoEstimate,margin=0,core=0,cautions=0,core_status=0;
+    uint32_t age_us=UINT32_MAX,sequence=0,valid_for_us=0,received_since_us=0;
+    /* The value is at least `wanted` and the sensor reads behind it are younger than max_age_us at `now_us`. */
+    bool atLeast(uint8_t wanted,uint32_t now_us,uint32_t max_age_us) const {
+        if(!valid || cell>=1800 || level<wanted || wanted==NoEstimate || age_us==UINT32_MAX)return false;
+        uint32_t waited=(uint32_t)(now_us-received_since_us);
+        return age_us<max_age_us && waited<max_age_us-age_us;
+    }
+    bool angleDegrees(uint8_t wanted,uint32_t now_us,uint32_t max_age_us,float &degrees) const {
+        if(!atLeast(wanted,now_us,max_age_us))return false;
+        degrees=cell*0.2f;return true;
+    }
+};
 struct Origin {
     bool valid=false,supported=false,coordinate_ready=false,record_valid=false,busy=false,durable=false;
     uint8_t boot_status=0,error=0;
@@ -321,6 +342,24 @@ public:
         q.remaining_us=em_u32(bytes+20);q.age_us=em_u32(bytes+24);q.received_since_us=start;
         q.fresh=(bytes[2]&2) && q.remaining_us<0x80000000UL && (uint32_t)(nowUs()-start)<q.remaining_us;
         q.fault_persistence_supported=(bytes[30]&2)==0;
+        return Ok;
+    }
+    /* Optional frame. A sensor without it refuses the selector and the read comes back as CorruptResponse or
+     * BusError; treat any result other than Ok as "no estimate" and keep using poll(). It does not touch the
+     * command state, and it does not replace poll(): call both. */
+    Result readEstimate(Estimate &e) {
+        e=Estimate();uint8_t b[32];uint32_t started=nowUs();
+        Result result=receive(M2_ESTIMATE,0xec,b);if(result!=Ok)return result;
+        if(b[2]!=1)return UnsupportedProtocol;
+        uint16_t cell=em_u16(b+4),confirmed=em_u16(b+10);uint8_t level=b[6];
+        if(level>Confirmed || (level==NoEstimate)!=(cell==0xffff) || (cell!=0xffff && cell>=1800) ||
+           (level==Confirmed)!=(confirmed!=0xffff) || (level==Confirmed && cell!=confirmed))return CorruptResponse;
+        e.cell=cell;e.level=level;e.margin=b[7];e.diagnostic=em_u16(b+8);e.confirmed_cell=confirmed;e.core=b[3];
+        e.sequence=em_u32(b+12);e.age_us=em_u32(b+16);e.valid_for_us=em_u32(b+20);e.core_status=b[26];
+        e.cautions=(uint8_t)(((e.diagnostic&M2_EST_FAST)?ShaftFast:0) | ((e.diagnostic&M2_EST_SENSOR)?SensorDoubt:0) |
+                             ((e.diagnostic&M2_EST_INSTALL)?InstallationCheck:0) | ((e.diagnostic&M2_EST_SETTLING)?Settling:0));
+        /* Use transaction START to conservatively charge all bus latency. */
+        e.received_since_us=started;e.valid=true;
         return Ok;
     }
     Result readCandidatePage(uint8_t page,Candidates &set) {

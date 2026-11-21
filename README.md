@@ -2,7 +2,11 @@
 
 [日本語の使い方](README.ja.md)
 
-Version **0.2.1** targets **wire protocol 1 / sensor core 0x0E**.
+Version **0.3.0** targets **wire protocol 1 / sensor core 0x0E**.
+0.3.0 adds `readEstimate`: sensors that have the optional estimate frame report
+their best value at all times with a trust level (`Confirmed`, `Good`,
+`Doubtful`, `Guess`). `poll` and every existing call are unchanged; see
+[docs/protocol.md](docs/protocol.md#estimate-optional).
 0.2.1 adds the `TooFast` core flag (0x80) and acquisition reason 7: the sensor
 reports that the shaft outran its scan and withholds the angle until it slows.
 It replaces the old 0x07 register reader; there is no backward-compatibility API.
@@ -42,6 +46,7 @@ interval width are not claims of physical angular accuracy.
 | Task | Methods |
 | --- | --- |
 | Read current angle/status | `poll`, `readPosition` |
+| Best value with a trust level, before the angle is confirmed (optional frame) | `readEstimate` |
 | Configure scan interval | `configureFixed`, `configureAuto`, `readConfiguration` |
 | Explicit scan control | `start`, `stop` |
 | Frozen candidate set/resolution | `captureCandidates`, `readQuality`, `readCandidatePage`, `readCandidateOrigin` |
