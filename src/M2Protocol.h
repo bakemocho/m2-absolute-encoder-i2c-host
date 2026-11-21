@@ -5,7 +5,7 @@ namespace m2enc {
 constexpr uint8_t M2_ADDRESS=0x36, M2_PROTOCOL=1, M2_CORE_VERSION=0x0e;
 constexpr uint8_t M2_STATUS=0x80, M2_CONFIG=0x81, M2_QUALITY=0x82,
     M2_FAULT_MEMORY=0x83, M2_BOARD_DIAGNOSTIC=0x84, M2_ORIGIN=0x85,
-    M2_POSITION=0x86, M2_CANDIDATE_ORIGIN=0x87, M2_MAINTENANCE=0x88,
+    M2_POSITION=0x86, M2_CANDIDATE_ORIGIN=0x87, M2_MAINTENANCE=0x88, M2_ESTIMATE=0x89,
     M2_CANDIDATE_PAGE=0x90, M2_COMMAND=0xa0, M2_SENSOR_TEST_PAGE=0xb0;
 constexpr uint8_t M2_SENSOR_TEST_PAGES=10, M2_CANDIDATE_PAGES=12,
     M2_REQUEST_BYTES=24, M2_RESPONSE_BYTES=32;
@@ -27,6 +27,16 @@ constexpr uint8_t M2_REPAIR_ACK=0xa5, M2_STOPPED=3;
 enum CoreStatus { Absolute=0x01, Degraded=0x02, NeedMotion=0x04,
     ConfigurationError=0x08, BitFault=0x10, Probation=0x20, Reversed=0x40,
     TooFast=0x80 }; /* an edge outran the scan: the angle is withheld until the shaft slows */
+/* Optional estimate frame (selector M2_ESTIMATE). Sensors that do not have it refuse the selector.
+ * The level says how far the value may be trusted; Confirmed is the angle of the status frame. */
+enum EstimateLevel { NoEstimate=0, Guess=1, Doubtful=2, Good=3, Confirmed=4 };
+/* Why a value is not Confirmed, in four plain groups. The sensor's own detail word is carried as
+ * Estimate::diagnostic for support requests; its bits are not part of this contract. */
+enum EstimateCaution { ShaftFast=0x01,        /* the shaft moved faster than the sensor can follow, now or just before */
+                       SensorDoubt=0x02,      /* a sensor read is missing, stale, excluded or disagrees with the others */
+                       InstallationCheck=0x04,/* the sensor has not finished checking its installation; turn the shaft slowly */
+                       Settling=0x08 };       /* the value has not settled yet; it needs more travel */
+constexpr uint16_t M2_EST_FAST=0x0041, M2_EST_SENSOR=0x0586, M2_EST_INSTALL=0x0018, M2_EST_SETTLING=0x0220;
 inline uint16_t em_u16(const uint8_t* p) {
     return uint16_t(uint16_t(p[0]) | (uint16_t(p[1])<<8));
 }
